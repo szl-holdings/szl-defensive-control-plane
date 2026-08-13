@@ -124,6 +124,13 @@ class LocalHttpSurfaceTests(unittest.TestCase):
                 trusted_hosts=["*.test.svc"],
             )
         with self.assertRaises(ValidationError):
+            create_server(
+                self.plane,
+                host="0.0.0.0",
+                mode=CLUSTER_READONLY_MODE,
+                trusted_hosts=["a" * 254],
+            )
+        with self.assertRaises(ValidationError):
             create_server(self.plane, host="0.0.0.0", mode=LOCAL_MODE)
 
     def test_cluster_readonly_mode_accepts_only_allowlisted_host(self) -> None:
@@ -193,6 +200,7 @@ class LocalHttpSurfaceTests(unittest.TestCase):
             "127.0.0.1:123456",
             "127.0.0.1:-1",
             "127.0.0.1:not-a-port",
+            "0" + ".00" * 5000,
             "127.0.0.1:²",
             "",
         ):

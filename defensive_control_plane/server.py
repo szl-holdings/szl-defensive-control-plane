@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import re
 import signal
 import socket
 import threading
@@ -18,9 +17,23 @@ from .core import ControlPlane, ValidationError
 LOCAL_MODE = "local"
 CLUSTER_READONLY_MODE = "cluster-readonly"
 SERVE_MODES = frozenset({LOCAL_MODE, CLUSTER_READONLY_MODE})
-_HOSTNAME_RE = re.compile(
-    r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\Z"
-)
+_DNS_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
+
+
+def _is_valid_hostname(value: str) -> bool:
+    """Validate an ASCII DNS name with one linear, bounded scan."""
+
+    if not 1 <= len(value) <= 253 or value.startswith(".") or value.endswith("."):
+        return False
+    for label in value.split("."):
+        if (
+            not 1 <= len(label) <= 63
+            or label[0] == "-"
+            or label[-1] == "-"
+            or any(character not in _DNS_CHARACTERS for character in label)
+        ):
+            return False
+    return True
 
 
 def _normalize_trusted_hosts(values: Iterable[str] | None) -> frozenset[str]:
@@ -34,14 +47,18 @@ def _normalize_trusted_hosts(values: Iterable[str] | None) -> frozenset[str]:
         try:
             value = ipaddress.ip_address(value).compressed
         except ValueError:
-            if not _HOSTNAME_RE.fullmatch(value):
+            if not _is_valid_hostname(value):
                 raise ValidationError(f"invalid trusted host: {raw_value!r}")
         normalized.add(value)
     return frozenset(normalized)
 
 
 def _host_from_header(host_header: str) -> str | None:
-    if not host_header or host_header != host_header.strip():
+    if (
+        not host_header
+        or len(host_header) > 260
+        or host_header != host_header.strip()
+    ):
         return None
     if host_header.startswith("["):
         closing = host_header.find("]")
@@ -66,7 +83,7 @@ def _host_from_header(host_header: str) -> str | None:
     try:
         return ipaddress.ip_address(lowered).compressed
     except ValueError:
-        return lowered if _HOSTNAME_RE.fullmatch(lowered) else None
+        return lowered if _is_valid_hostname(lowered) else None
 
 
 def _valid_port_suffix(suffix: str) -> bool:
