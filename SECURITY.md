@@ -34,4 +34,3 @@ or use data obtained outside the authorized test scope.
 The maintainers will coordinate validation, remediation, release, and public
 disclosure through the private advisory. No response-time or bounty commitment
 is implied by this policy.
-

@@ -17,4 +17,3 @@ tests
 *.sqlite3-wal
 *.tmp
 *.zip
-

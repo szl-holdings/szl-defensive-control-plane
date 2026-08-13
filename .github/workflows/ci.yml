@@ -167,4 +167,3 @@ jobs:
       - name: Stop smoke container
         if: always()
         run: docker rm --force dcp-ci 2>/dev/null || true
-

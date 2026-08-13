@@ -36,4 +36,3 @@ EXPOSE 8080
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["python", "-B", "-m", "defensive_control_plane"]
 CMD ["serve", "--db", "/data/control-plane.sqlite3", "--mode", "cluster-readonly", "--host", "0.0.0.0", "--port", "8080"]
-

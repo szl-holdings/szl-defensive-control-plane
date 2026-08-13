@@ -16,4 +16,3 @@ evidence/*.json
 *.sqlite3-wal
 *.tmp
 *.zip
-
