@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "defensive-control-plane"
+version = "0.4.0"
+description = "Evidence-bound defensive security control plane for governed response"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "SZL Holdings" }]
+maintainers = [{ name = "SZL Holdings" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Information Technology",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.scripts]
+defensive-control-plane = "defensive_control_plane.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/szl-holdings/szl-defensive-control-plane"
+Security = "https://github.com/szl-holdings/szl-defensive-control-plane/security/advisories/new"
+
+[tool.setuptools.packages.find]
+include = ["defensive_control_plane*"]
+
+[tool.unittest]
+start-directory = "tests"

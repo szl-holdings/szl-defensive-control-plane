@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: test / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run unit tests
+        run: python -B -m unittest discover -s tests -v
+
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Run evidence-bound verification
+        run: python -B verify.py
+      - name: Upload local verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: local-verification-${{ github.sha }}
+          path: evidence/local-verification.json
+          if-no-files-found: error
+          retention-days: 90
+
+  package:
+    name: package
+    needs: [test, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install --disable-pip-version-check build==1.3.0
+          python -m build
+      - name: Smoke test installed wheel away from source tree
+        run: |
+          python -m venv /tmp/dcp-wheel
+          /tmp/dcp-wheel/bin/python -m pip install --disable-pip-version-check dist/*.whl
+          cd /tmp
+          /tmp/dcp-wheel/bin/defensive-control-plane demo > dcp-wheel-demo.json
+          /tmp/dcp-wheel/bin/python -m json.tool dcp-wheel-demo.json >/dev/null
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-packages-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  container:
+    name: container
+    needs: [test, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build local smoke image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: defensive-control-plane:ci
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+            SOURCE_VERSION=0.4.0
+      - name: Verify non-root image and cluster-readonly endpoints
+        run: |
+          test "$(docker image inspect defensive-control-plane:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker run --detach --rm --name dcp-ci \
+            --publish 127.0.0.1:8080:8080 \
+            --env DCP_EVENT_ROOT_KEY_HEX=1111111111111111111111111111111111111111111111111111111111111111 \
+            --env DCP_EVIDENCE_KEY_HEX=2222222222222222222222222222222222222222222222222222222222222222 \
+            --env DCP_TRUSTED_HOSTS=defensive-control-plane.test.svc \
+            defensive-control-plane:ci
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          for attempt in range(30):
+              try:
+                  request = urllib.request.Request(
+                      "http://127.0.0.1:8080/livez",
+                      headers={"Host": "defensive-control-plane.test.svc"},
+                  )
+                  with urllib.request.urlopen(request, timeout=2) as response:
+                      assert response.status == 200
+                      assert json.load(response)["status"] == "alive"
+                  break
+              except Exception:
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+
+          for path in ("/readyz", "/api/build-info", "/api/v1/lanes"):
+              request = urllib.request.Request(
+                  "http://127.0.0.1:8080" + path,
+                  headers={"Host": "defensive-control-plane.test.svc"},
+              )
+              with urllib.request.urlopen(request, timeout=5) as response:
+                  assert response.status == 200
+                  payload = json.load(response)
+                  assert isinstance(payload, dict)
+
+          request = urllib.request.Request(
+              "http://127.0.0.1:8080/livez",
+              headers={"Host": "attacker.example"},
+          )
+          try:
+              urllib.request.urlopen(request, timeout=5)
+          except urllib.error.HTTPError as error:
+              assert error.code == 400
+          else:
+              raise AssertionError("untrusted Host was accepted")
+          PY
+      - name: Stop smoke container
+        if: always()
+        run: docker rm --force dcp-ci 2>/dev/null || true
+
