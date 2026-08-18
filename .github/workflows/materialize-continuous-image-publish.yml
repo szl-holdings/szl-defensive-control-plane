@@ -1,0 +1,54 @@
+name: Materialize Signed Current-Main Image Controller
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/scripts/materialize_continuous_image_publish.py
+      - .github/workflows/materialize-continuous-image-publish.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-dcp-current-main-image-v1
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    name: Publish exact signed release-controller tree
+    if: >-
+      github.repository == 'szl-holdings/szl-defensive-control-plane' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'diag/container-publish-materialize-v1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      TARGET_BRANCH: feat/continuous-signed-image-v1
+      EXPECTED_PARENT: 2d6ffe7245b96c586f373de55de7cc9461195d1c
+    steps:
+      - name: Checkout exact materializer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Build, verify, and publish signed permanent tree
+        run: python .github/scripts/materialize_continuous_image_publish.py
+
+      - name: Upload immutable materialization receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: current-main-image-materialization-${{ github.run_id }}
+          path: current-main-image-materialization.json
+          if-no-files-found: warn
+          retention-days: 90
