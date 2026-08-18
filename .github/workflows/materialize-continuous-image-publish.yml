@@ -41,6 +41,19 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Reconcile exact mutable-tag predicate
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('.github/scripts/materialize_continuous_image_publish.py')
+          source = path.read_text(encoding='utf-8')
+          old = 'forbidden = ("--admin", "force=true", "pull_request_target", "latest")'
+          new = 'forbidden = ("--admin", "force=true", "pull_request_target", ":latest")'
+          if source.count(old) != 1:
+              raise SystemExit('materializer immutable-tag predicate changed unexpectedly')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
       - name: Build, verify, and publish signed permanent tree
         run: python .github/scripts/materialize_continuous_image_publish.py
 
