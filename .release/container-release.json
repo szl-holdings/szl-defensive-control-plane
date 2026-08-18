@@ -1,8 +1,8 @@
 {
   "channel": "current-main",
-  "generation": 1,
-  "minimum_source_commit": "2d6ffe7245b96c586f373de55de7cc9461195d1c",
-  "reason": "Publish the exact current protected source as a signed, attested immutable GHCR image for downstream cluster acceptance.",
+  "generation": 2,
+  "minimum_source_commit": "3e35b4605670bec2ada67017a12dd8ca01f96fe2",
+  "reason": "Trigger the first protected-main signed container publication after installing the immutable current-main release controller.",
   "schema": "szl.container-release-request/v1",
   "version": "0.4.0"
 }
