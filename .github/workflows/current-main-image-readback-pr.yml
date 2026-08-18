@@ -1,0 +1,84 @@
+name: Current-Main Image — Immutable Readback
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/current-main-image-readback-pr.yml
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: current-main-image-readback-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_TAG: ghcr.io/szl-holdings/szl-defensive-control-plane:sha-1f15c9ede25435795a724f867b44163e157a6403
+  REPORT_PATH: reports/current-main-image-readback.json
+
+jobs:
+  readback:
+    name: resolve digest and verify multi-architecture manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR read-only
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for immutable subject and verify manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$REPORT_PATH")"
+          available=0
+          for attempt in $(seq 1 80); do
+            if docker buildx imagetools inspect "$IMAGE_TAG" > /tmp/inspect.txt 2>/tmp/inspect.err; then
+              available=1
+              break
+            fi
+            sleep 20
+          done
+          if [ "$available" -ne 1 ]; then
+            echo "::error::Immutable current-main image did not become readable."
+            cat /tmp/inspect.err
+            exit 1
+          fi
+
+          digest="$(awk '$1 == "Digest:" {print $2; exit}' /tmp/inspect.txt)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+            || { echo "::error::No canonical manifest digest in buildx readback"; cat /tmp/inspect.txt; exit 1; }
+          docker buildx imagetools inspect --raw "$IMAGE_TAG" > /tmp/manifest.json
+          jq -e '.manifests | type == "array" and length >= 2' /tmp/manifest.json >/dev/null
+          amd64="$(jq '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | length' /tmp/manifest.json)"
+          arm64="$(jq '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length' /tmp/manifest.json)"
+          [ "$amd64" -ge 1 ] || { echo "::error::linux/amd64 manifest absent"; exit 1; }
+          [ "$arm64" -ge 1 ] || { echo "::error::linux/arm64 manifest absent"; exit 1; }
+
+          jq -n \
+            --arg schema 'szl.current-main-image-readback/v1' \
+            --arg tag "$IMAGE_TAG" \
+            --arg digest "$digest" \
+            --arg source_revision '1f15c9ede25435795a724f867b44163e157a6403' \
+            --argjson amd64 "$amd64" \
+            --argjson arm64 "$arm64" \
+            '{schema:$schema,tag:$tag,digest:$digest,source_revision:$source_revision,linux_amd64:$amd64,linux_arm64:$arm64,immutable_tag:true,secret_value_recorded:false}' \
+            > "$REPORT_PATH"
+          cat "$REPORT_PATH"
+
+      - name: Upload immutable readback evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: current-main-image-readback-${{ github.run_id }}
+          path: ${{ env.REPORT_PATH }}
+          if-no-files-found: error
+          retention-days: 90
