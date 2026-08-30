@@ -48,6 +48,8 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Verify immutable workflow action pins
+        run: python -B scripts/verify_workflow_action_pins.py
       - name: Run evidence-bound verification
         run: python -B verify.py
       - name: Upload local verification evidence
