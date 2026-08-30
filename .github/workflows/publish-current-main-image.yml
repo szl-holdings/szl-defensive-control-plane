@@ -9,6 +9,8 @@ on:
       - Dockerfile
       - pyproject.toml
       - defensive_control_plane/**
+      - scripts/verify_workflow_action_pins.py
+      - tests/test_workflow_action_pins.py
   workflow_dispatch: {}
 
 permissions:
