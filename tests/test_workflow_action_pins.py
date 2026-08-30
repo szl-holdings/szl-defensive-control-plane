@@ -98,6 +98,14 @@ class WorkflowActionPinTests(unittest.TestCase):
         alternate_forms = {
             "quoted value": f'- uses: "{BUILD_PUSH_ACTION}@v7"',
             "quoted key": f'- "uses": {BUILD_PUSH_ACTION}@v7',
+            "unicode-escaped key": r'- "us\u0065s": docker/build-push-action@v7',
+            "hex-escaped key": r'- "\x75ses": docker/build-push-action@v7',
+            "long-unicode-escaped key": (
+                r'- "\U00000075ses": docker/build-push-action@v7'
+            ),
+            "escaped key in flow mapping": (
+                r'- {"us\u0065s": docker/build-push-action@v7}'
+            ),
             "flow mapping": f"- {{uses: {BUILD_PUSH_ACTION}@v7}}",
             "case variant": (
                 f"- uses: Docker/Build-Push-Action@{VALID_REVISION} "
