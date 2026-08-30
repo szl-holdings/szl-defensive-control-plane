@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 from pathlib import Path
 from typing import Sequence
@@ -17,6 +18,9 @@ WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
 USES_KEY = re.compile(
     r"""(?:["']uses["']|\buses\b)\s*:""",
     re.IGNORECASE,
+)
+QUOTED_YAML_KEY = re.compile(
+    r"""(?P<double>"(?:\\.|[^"\\])*")\s*:|(?P<single>'(?:''|[^'])*')\s*:"""
 )
 EXTERNAL_REFERENCE = re.compile(
     r"^\s*(?:-\s*)?uses\s*:\s*"
@@ -38,6 +42,25 @@ def workflow_paths(workflow_directory: Path) -> list[Path]:
     )
 
 
+def _line_has_uses_key(line: str) -> bool:
+    """Detect plain and YAML-decoded quoted representations of the uses key."""
+    if USES_KEY.search(line) is not None:
+        return True
+
+    for match in QUOTED_YAML_KEY.finditer(line):
+        token = match.group("double") or match.group("single")
+        if token.startswith("'"):
+            decoded = token[1:-1].replace("''", "'")
+        else:
+            try:
+                decoded = ast.literal_eval(token)
+            except (SyntaxError, ValueError):
+                continue
+        if isinstance(decoded, str) and decoded.casefold() == "uses":
+            return True
+    return False
+
+
 def validation_errors(workflow_directory: Path) -> list[str]:
     """Return actionable errors for every executable workflow action reference."""
     if not workflow_directory.is_dir():
@@ -52,7 +75,7 @@ def validation_errors(workflow_directory: Path) -> list[str]:
         ):
             if line.lstrip().startswith("#"):
                 continue
-            if USES_KEY.search(line) is None:
+            if not _line_has_uses_key(line):
                 continue
             if LOCAL_REFERENCE.fullmatch(line) is not None:
                 continue
