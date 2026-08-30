@@ -29,7 +29,7 @@ EXTERNAL_REFERENCE = re.compile(
     r"(?P<version>v\d+\.\d+\.\d+)\s*$"
 )
 LOCAL_REFERENCE = re.compile(
-    r"^\s*(?:-\s*)?uses\s*:\s*\./[a-zA-Z0-9_.\-/]+\s*$"
+    r"^\s*(?:-\s*)?uses\s*:\s*(?P<path>\./[a-zA-Z0-9_.\-/]+)\s*$"
 )
 
 
@@ -61,15 +61,72 @@ def _line_has_uses_key(line: str) -> bool:
     return False
 
 
+def _repository_root(workflow_directory: Path) -> Path:
+    if (
+        workflow_directory.name == "workflows"
+        and workflow_directory.parent.name == ".github"
+    ):
+        return workflow_directory.parents[1].resolve()
+    return workflow_directory.resolve()
+
+
+def _display_path(path: Path, repository_root: Path) -> Path:
+    try:
+        return path.relative_to(repository_root)
+    except ValueError:
+        return path
+
+
+def _local_action_manifest(
+    reference: str,
+    source_path: Path,
+    line_number: int,
+    repository_root: Path,
+    errors: list[str],
+) -> Path | None:
+    display_path = _display_path(source_path, repository_root)
+    action_directory = (repository_root / reference[2:]).resolve()
+    try:
+        action_directory.relative_to(repository_root)
+    except ValueError:
+        errors.append(
+            f"{display_path}:{line_number}: local action {reference!r} escapes "
+            "the repository root"
+        )
+        return None
+
+    manifests = [
+        action_directory / name
+        for name in ("action.yml", "action.yaml")
+        if (action_directory / name).is_file()
+    ]
+    if len(manifests) != 1:
+        errors.append(
+            f"{display_path}:{line_number}: local action {reference!r} must "
+            "resolve to exactly one action.yml or action.yaml manifest"
+        )
+        return None
+    return manifests[0]
+
+
 def validation_errors(workflow_directory: Path) -> list[str]:
-    """Return actionable errors for every executable workflow action reference."""
+    """Return actionable errors for workflows and referenced local actions."""
     if not workflow_directory.is_dir():
         return [f"{workflow_directory}: workflow directory does not exist"]
 
     errors: list[str] = []
     build_push_reference_count = 0
-    for path in workflow_paths(workflow_directory):
-        display_path = path.relative_to(workflow_directory)
+    repository_root = _repository_root(workflow_directory)
+    pending_paths = workflow_paths(workflow_directory)
+    scanned_paths: set[Path] = set()
+
+    while pending_paths:
+        path = pending_paths.pop(0).resolve()
+        if path in scanned_paths:
+            continue
+        scanned_paths.add(path)
+        display_path = _display_path(path, repository_root)
+
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
@@ -77,8 +134,20 @@ def validation_errors(workflow_directory: Path) -> list[str]:
                 continue
             if not _line_has_uses_key(line):
                 continue
-            if LOCAL_REFERENCE.fullmatch(line) is not None:
+
+            local_match = LOCAL_REFERENCE.fullmatch(line)
+            if local_match is not None:
+                manifest = _local_action_manifest(
+                    local_match.group("path"),
+                    path,
+                    line_number,
+                    repository_root,
+                    errors,
+                )
+                if manifest is not None and manifest not in scanned_paths:
+                    pending_paths.append(manifest)
                 continue
+
             match = EXTERNAL_REFERENCE.fullmatch(line)
             if match is None:
                 errors.append(
