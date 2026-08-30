@@ -25,6 +25,25 @@ class WorkflowActionPinTests(unittest.TestCase):
             )
             return validation_errors(workflow_directory)
 
+    def _validate_repository(
+        self,
+        workflow_body: str,
+        manifests: dict[str, str],
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repository_root = Path(temporary_directory)
+            workflow_directory = repository_root / ".github" / "workflows"
+            workflow_directory.mkdir(parents=True)
+            (workflow_directory / "fixture.yml").write_text(
+                "name: fixture\nsteps:\n  " + workflow_body + "\n",
+                encoding="utf-8",
+            )
+            for relative_path, manifest_body in manifests.items():
+                manifest_path = repository_root / relative_path
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text(manifest_body, encoding="utf-8")
+            return validation_errors(workflow_directory)
+
     def test_repository_workflows_are_clean(self) -> None:
         self.assertEqual(
             validation_errors(REPO_ROOT / ".github" / "workflows"),
@@ -83,13 +102,56 @@ class WorkflowActionPinTests(unittest.TestCase):
             errors,
         )
 
-    def test_repository_local_action_is_allowed(self) -> None:
+    def test_repository_local_action_is_allowed_when_manifest_is_clean(self) -> None:
         canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
-        errors = self._validate_line(
-            "fixture.yml",
+        errors = self._validate_repository(
             canonical + "\n  - uses: ./local/action",
+            {
+                "local/action/action.yml": (
+                    "name: local fixture\n"
+                    "runs:\n"
+                    "  using: composite\n"
+                    "  steps:\n"
+                    "    - run: 'true'\n"
+                    "      shell: bash\n"
+                )
+            },
         )
         self.assertEqual(errors, [])
+
+    def test_local_action_manifest_is_required(self) -> None:
+        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
+        errors = self._validate_repository(
+            canonical + "\n  - uses: ./local/missing",
+            {},
+        )
+        self.assertTrue(any("exactly one action.yml" in error for error in errors), errors)
+
+    def test_nested_local_action_moving_tag_is_rejected(self) -> None:
+        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
+        errors = self._validate_repository(
+            canonical + "\n  - uses: ./actions/outer",
+            {
+                "actions/outer/action.yaml": (
+                    "name: outer\n"
+                    "runs:\n"
+                    "  using: composite\n"
+                    "  steps:\n"
+                    "    - uses: ./actions/inner\n"
+                ),
+                "actions/inner/action.yml": (
+                    "name: inner\n"
+                    "runs:\n"
+                    "  using: composite\n"
+                    "  steps:\n"
+                    "    - uses: actions/checkout@v4\n"
+                ),
+            },
+        )
+        self.assertTrue(
+            any("workflow action uses entries must" in error for error in errors),
+            errors,
+        )
 
     def test_noncanonical_forms_cannot_hide_beside_a_valid_reference(self) -> None:
         canonical = (
