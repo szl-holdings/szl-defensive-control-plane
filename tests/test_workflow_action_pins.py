@@ -310,22 +310,62 @@ class WorkflowActionPinTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def test_document_marker_before_flow_root_is_scanned(self) -> None:
-        errors = self._validate_raw_workflow(
-            "--- {jobs: {pwn: {runs-on: ubuntu-latest, "
-            "steps: [{uses: actions/checkout@v4}]}}}\n"
+        for prefix in ("--- ", "\ufeff--- "):
+            with self.subTest(prefix=repr(prefix)):
+                errors = self._validate_raw_workflow(
+                    prefix
+                    + "{jobs: {pwn: {runs-on: ubuntu-latest, "
+                    + "steps: [{uses: actions/checkout@v4}]}}}\n"
+                )
+                self.assertTrue(
+                    any(
+                        "workflow action uses entries must" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_multiline_quoted_values_are_not_treated_as_keys(self) -> None:
+        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
+        values = {
+            "double quoted": (
+                '- run: "echo\n'
+                "      uses: actions/checkout@v4\n"
+                '      hello"'
+            ),
+            "single quoted": (
+                "- run: 'echo\n"
+                "      uses: actions/checkout@v4\n"
+                "      hello'"
+            ),
+            "flow value": (
+                '- {run: "echo\n'
+                "      uses: actions/checkout@v4\n"
+                '      hello"}'
+            ),
+        }
+        for name, value in values.items():
+            with self.subTest(name=name):
+                errors = self._validate_line(
+                    "fixture.yml",
+                    canonical + "\n  " + value,
+                )
+                self.assertEqual(errors, [])
+
+    def test_scanning_resumes_after_multiline_quoted_value(self) -> None:
+        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
+        errors = self._validate_line(
+            "fixture.yml",
+            canonical
+            + '\n  - run: "echo\n'
+            + "      uses: harmless scalar text\n"
+            + '      hello"\n'
+            + "  - uses: actions/checkout@v4",
         )
         self.assertTrue(
             any("workflow action uses entries must" in error for error in errors),
             errors,
         )
-
-    def test_multiline_quoted_value_is_not_treated_as_a_key(self) -> None:
-        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
-        errors = self._validate_line(
-            "fixture.yml",
-            canonical + '\n  - run: "echo\n      hello"',
-        )
-        self.assertEqual(errors, [])
 
     def test_multiword_flow_plain_key_is_not_split_into_uses(self) -> None:
         canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
