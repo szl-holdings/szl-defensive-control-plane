@@ -275,6 +275,8 @@ def _flow_key_facts(
 def _line_tokens(line: str) -> tuple[int, int, list[YamlToken]]:
     leading = len(line) - len(line.lstrip(" "))
     position = leading
+    if position == 0 and line.startswith("\ufeff"):
+        position = 1
     if (
         leading == 0
         and line.startswith("---", position)

@@ -310,14 +310,20 @@ class WorkflowActionPinTests(unittest.TestCase):
         self.assertEqual(errors, [])
 
     def test_document_marker_before_flow_root_is_scanned(self) -> None:
-        errors = self._validate_raw_workflow(
-            "--- {jobs: {pwn: {runs-on: ubuntu-latest, "
-            "steps: [{uses: actions/checkout@v4}]}}}\n"
-        )
-        self.assertTrue(
-            any("workflow action uses entries must" in error for error in errors),
-            errors,
-        )
+        for prefix in ("--- ", "\ufeff--- "):
+            with self.subTest(prefix=repr(prefix)):
+                errors = self._validate_raw_workflow(
+                    prefix
+                    + "{jobs: {pwn: {runs-on: ubuntu-latest, "
+                    + "steps: [{uses: actions/checkout@v4}]}}}\n"
+                )
+                self.assertTrue(
+                    any(
+                        "workflow action uses entries must" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
 
     def test_multiline_quoted_values_are_not_treated_as_keys(self) -> None:
         canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
