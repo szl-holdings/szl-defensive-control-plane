@@ -15,12 +15,9 @@ VERIFIED_BUILD_PUSH_REVISIONS = {
     "v7.3.0": "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
 }
 WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
-USES_KEY = re.compile(
-    r"""(?:["']uses["']|\buses\b)\s*:""",
-    re.IGNORECASE,
-)
-QUOTED_YAML_KEY = re.compile(
-    r"""(?P<double>"(?:\\.|[^"\\])*")\s*:|(?P<single>'(?:''|[^'])*')\s*:"""
+BLOCK_SCALAR_INDICATOR = re.compile(
+    r"[|>](?:(?P<indent_first>[1-9])(?P<chomp_after>[+-])?"
+    r"|(?P<chomp_first>[+-])(?P<indent_after>[1-9])?)?"
 )
 EXTERNAL_REFERENCE = re.compile(
     r"^\s*(?:-\s*)?uses\s*:\s*"
@@ -42,23 +39,231 @@ def workflow_paths(workflow_directory: Path) -> list[Path]:
     )
 
 
-def _line_has_uses_key(line: str) -> bool:
-    """Detect plain and YAML-decoded quoted representations of the uses key."""
-    if USES_KEY.search(line) is not None:
-        return True
-
-    for match in QUOTED_YAML_KEY.finditer(line):
-        token = match.group("double") or match.group("single")
-        if token.startswith("'"):
-            decoded = token[1:-1].replace("''", "'")
-        else:
-            try:
-                decoded = ast.literal_eval(token)
-            except (SyntaxError, ValueError):
+def _quoted_scalar_end(text: str, position: int) -> tuple[int, bool]:
+    quote = text[position]
+    position += 1
+    while position < len(text):
+        character = text[position]
+        if quote == "'" and character == "'":
+            if position + 1 < len(text) and text[position + 1] == "'":
+                position += 2
                 continue
-        if isinstance(decoded, str) and decoded.casefold() == "uses":
-            return True
-    return False
+            return position + 1, True
+        if quote == '"' and character == "\\":
+            position += 2
+            continue
+        if character == quote:
+            return position + 1, True
+        position += 1
+    return len(text), False
+
+
+YamlToken = tuple[str, str, int, int]
+PROPERTY_TOKEN_KINDS = frozenset({"anchor", "tag"})
+FLOW_PUNCTUATION = frozenset("[]{},")
+
+
+def _is_mapping_colon(text: str, position: int) -> bool:
+    if text[position] != ":":
+        return False
+    next_position = position + 1
+    return (
+        next_position == len(text)
+        or text[next_position].isspace()
+        or text[next_position] in FLOW_PUNCTUATION
+    )
+
+
+def _yaml_tokens(text: str, position: int) -> list[YamlToken]:
+    """Lex one physical YAML line at node boundaries, without parsing values."""
+    tokens: list[YamlToken] = []
+    initial_position = position
+    while position < len(text):
+        while position < len(text) and text[position].isspace():
+            position += 1
+        if position >= len(text) or text[position] == "#":
+            break
+
+        start = position
+        character = text[position]
+        if character in FLOW_PUNCTUATION or character == ":":
+            tokens.append((character, character, start, start + 1))
+            position += 1
+            continue
+        previous = position - 1
+        while previous >= initial_position and text[previous].isspace():
+            previous -= 1
+        quote_starts_node = (
+            not tokens
+            or previous < initial_position
+            or text[previous] in "[{,:"
+            or tokens[-1][0] in PROPERTY_TOKEN_KINDS
+        )
+        if character in {"'", '"'} and quote_starts_node:
+            position, closed = _quoted_scalar_end(text, position)
+            kind = "quoted" if closed else "unterminated-quoted"
+            tokens.append((kind, text[start:position], start, position))
+            continue
+        if character == "?" and (
+            position + 1 == len(text)
+            or text[position + 1].isspace()
+            or text[position + 1] in "[{"
+        ):
+            tokens.append(("explicit", character, start, start + 1))
+            position += 1
+            continue
+
+        if character in "*&!":
+            kind = {"*": "alias", "&": "anchor", "!": "tag"}[character]
+            if (
+                character == "!"
+                and position + 1 < len(text)
+                and text[position + 1] == "<"
+            ):
+                position += 2
+                while position < len(text) and text[position] != ">":
+                    position += 1
+                if position < len(text):
+                    position += 1
+                tokens.append((kind, text[start:position], start, position))
+                continue
+            position += 1
+            while position < len(text):
+                if text[position].isspace() or text[position] in FLOW_PUNCTUATION:
+                    break
+                if _is_mapping_colon(text, position):
+                    break
+                position += 1
+            tokens.append((kind, text[start:position], start, position))
+            continue
+
+        while position < len(text):
+            if text[position].isspace() or text[position] in FLOW_PUNCTUATION:
+                break
+            if _is_mapping_colon(text, position):
+                break
+            position += 1
+        tokens.append(("plain", text[start:position], start, position))
+    return tokens
+
+
+def _skip_properties(tokens: list[YamlToken], index: int) -> int:
+    while index < len(tokens) and tokens[index][0] in PROPERTY_TOKEN_KINDS:
+        index += 1
+    return index
+
+
+def _decoded_key(token: YamlToken) -> str | None:
+    kind, raw, _, _ = token
+    if kind == "plain":
+        return raw
+    if kind != "quoted":
+        return None
+    if raw.startswith("'"):
+        return raw[1:-1].replace("''", "'")
+    try:
+        decoded = ast.literal_eval(raw)
+    except (SyntaxError, ValueError):
+        return None
+    return decoded if isinstance(decoded, str) else None
+
+
+def _has_mapping_colon(tokens: list[YamlToken], index: int) -> bool:
+    return index + 1 < len(tokens) and tokens[index + 1][0] == ":"
+
+
+def _key_facts(tokens: list[YamlToken], index: int) -> tuple[bool, bool]:
+    if index >= len(tokens):
+        return False, False
+    kind = tokens[index][0]
+    if kind == "unterminated-quoted":
+        return False, True
+    if kind == "explicit":
+        return False, True
+    if kind == "alias" and _has_mapping_colon(tokens, index):
+        return False, True
+    if kind in "]}" and _has_mapping_colon(tokens, index):
+        return False, True
+    if kind not in {"plain", "quoted"} or not _has_mapping_colon(tokens, index):
+        return False, False
+    decoded = _decoded_key(tokens[index])
+    if decoded is None:
+        return False, True
+    return decoded.casefold() == "uses", False
+
+
+def _flow_key_facts(tokens: list[YamlToken], start: int) -> tuple[bool, bool]:
+    has_uses = False
+    has_unsupported = False
+    for index in range(start, len(tokens)):
+        kind = tokens[index][0]
+        if kind == "explicit":
+            previous = index - 1
+            while previous >= start and tokens[previous][0] in PROPERTY_TOKEN_KINDS:
+                previous -= 1
+            if previous < start or tokens[previous][0] in "[{,":
+                has_unsupported = True
+            continue
+        uses, unsupported = _key_facts(tokens, index)
+        has_uses = has_uses or uses
+        has_unsupported = has_unsupported or unsupported
+    return has_uses, has_unsupported
+
+
+def _line_tokens(line: str) -> tuple[int, int, list[YamlToken]]:
+    leading = len(line) - len(line.lstrip(" "))
+    position = leading
+    if position < len(line) and line[position] == "-" and (
+        position + 1 == len(line) or line[position + 1].isspace()
+    ):
+        position += 1
+        while position < len(line) and line[position].isspace():
+            position += 1
+    return leading, position, _yaml_tokens(line, position)
+
+
+def _line_key_facts(line: str) -> tuple[bool, bool]:
+    """Classify structural mapping keys without scanning scalar values."""
+    _, _, tokens = _line_tokens(line)
+    if any(token[0] == "unterminated-quoted" for token in tokens):
+        return False, True
+    key_index = _skip_properties(tokens, 0)
+    if key_index >= len(tokens):
+        return False, False
+    if tokens[key_index][0] in "[{":
+        return _flow_key_facts(tokens, key_index)
+
+    has_uses, has_unsupported = _key_facts(tokens, key_index)
+    if not _has_mapping_colon(tokens, key_index):
+        return has_uses, has_unsupported
+    value_index = _skip_properties(tokens, key_index + 2)
+    if value_index < len(tokens) and tokens[value_index][0] in "[{":
+        flow_uses, flow_unsupported = _flow_key_facts(tokens, value_index)
+        has_uses = has_uses or flow_uses
+        has_unsupported = has_unsupported or flow_unsupported
+    return has_uses, has_unsupported
+
+
+def _block_scalar_header(line: str) -> tuple[int, int | None] | None:
+    """Return base indentation and optional explicit content indentation."""
+    leading, key_column, tokens = _line_tokens(line)
+    index = _skip_properties(tokens, 0)
+    base_indent = leading
+    if index >= len(tokens):
+        return None
+    match = BLOCK_SCALAR_INDICATOR.fullmatch(tokens[index][1])
+    if match is None:
+        if not _has_mapping_colon(tokens, index):
+            return None
+        base_indent = key_column
+        index = _skip_properties(tokens, index + 2)
+        if index >= len(tokens):
+            return None
+        match = BLOCK_SCALAR_INDICATOR.fullmatch(tokens[index][1])
+    if match is None:
+        return None
+    indent_text = match.group("indent_first") or match.group("indent_after")
+    return base_indent, int(indent_text) if indent_text is not None else None
 
 
 def _repository_root(workflow_directory: Path) -> Path:
@@ -106,7 +311,49 @@ def _local_action_manifest(
             "resolve to exactly one action.yml or action.yaml manifest"
         )
         return None
-    return manifests[0]
+    manifest = manifests[0].resolve()
+    try:
+        manifest.relative_to(repository_root)
+    except ValueError:
+        errors.append(
+            f"{display_path}:{line_number}: local action {reference!r} resolves "
+            "to a manifest outside the repository root"
+        )
+        return None
+    return manifest
+
+
+def _local_action_cycles(
+    graph: dict[Path, set[Path]],
+) -> list[tuple[Path, ...]]:
+    """Return deterministic directed cycles in the local-action graph."""
+    visited: set[Path] = set()
+    visiting: set[Path] = set()
+    stack: list[Path] = []
+    stack_positions: dict[Path, int] = {}
+    cycles: list[tuple[Path, ...]] = []
+
+    def visit(node: Path) -> None:
+        visiting.add(node)
+        stack_positions[node] = len(stack)
+        stack.append(node)
+        for target in sorted(graph.get(node, set()), key=lambda path: path.as_posix()):
+            if target in visiting:
+                cycles.append(tuple(stack[stack_positions[target] :] + [target]))
+            elif target not in visited:
+                visit(target)
+        stack.pop()
+        stack_positions.pop(node)
+        visiting.remove(node)
+        visited.add(node)
+
+    nodes = set(graph)
+    for targets in graph.values():
+        nodes.update(targets)
+    for node in sorted(nodes, key=lambda path: path.as_posix()):
+        if node not in visited:
+            visit(node)
+    return cycles
 
 
 def validation_errors(workflow_directory: Path) -> list[str]:
@@ -119,6 +366,7 @@ def validation_errors(workflow_directory: Path) -> list[str]:
     repository_root = _repository_root(workflow_directory)
     pending_paths = workflow_paths(workflow_directory)
     scanned_paths: set[Path] = set()
+    local_action_graph: dict[Path, set[Path]] = {}
 
     while pending_paths:
         path = pending_paths.pop(0).resolve()
@@ -126,13 +374,42 @@ def validation_errors(workflow_directory: Path) -> list[str]:
             continue
         scanned_paths.add(path)
         display_path = _display_path(path, repository_root)
+        block_scalar_base: int | None = None
+        block_scalar_content: int | None = None
 
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
+            if block_scalar_base is not None:
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                indentation = len(line) - len(line.lstrip(" "))
+                if block_scalar_content is None:
+                    if indentation > block_scalar_base:
+                        block_scalar_content = indentation
+                        continue
+                elif indentation >= block_scalar_content:
+                    continue
+                block_scalar_base = None
+                block_scalar_content = None
+
             if line.lstrip().startswith("#"):
                 continue
-            if not _line_has_uses_key(line):
+            block_header = _block_scalar_header(line)
+            if block_header is not None:
+                block_scalar_base, explicit_indent = block_header
+                if explicit_indent is not None:
+                    block_scalar_content = block_scalar_base + explicit_indent
+
+            has_uses_key, has_unsupported_key = _line_key_facts(line)
+            if has_unsupported_key:
+                errors.append(
+                    f"{display_path}:{line_number}: unsupported YAML mapping "
+                    "forms are forbidden (explicit, complex, alias-derived, "
+                    "or multi-line quoted)"
+                )
+                continue
+            if not has_uses_key:
                 continue
 
             local_match = LOCAL_REFERENCE.fullmatch(line)
@@ -144,8 +421,10 @@ def validation_errors(workflow_directory: Path) -> list[str]:
                     repository_root,
                     errors,
                 )
-                if manifest is not None and manifest not in scanned_paths:
-                    pending_paths.append(manifest)
+                if manifest is not None:
+                    local_action_graph.setdefault(path, set()).add(manifest)
+                    if manifest not in scanned_paths and manifest not in pending_paths:
+                        pending_paths.append(manifest)
                 continue
 
             match = EXTERNAL_REFERENCE.fullmatch(line)
@@ -176,6 +455,13 @@ def validation_errors(workflow_directory: Path) -> list[str]:
                     f"{expected_revision}, observed {revision}"
                 )
 
+    for cycle in _local_action_cycles(local_action_graph):
+        display_cycle = " -> ".join(
+            str(_display_path(node, repository_root)) for node in cycle
+        )
+        errors.append(
+            f"local action reference cycle detected: {display_cycle}"
+        )
     if build_push_reference_count == 0:
         errors.append(
             f"{workflow_directory}: no canonical {BUILD_PUSH_ACTION} references found"
