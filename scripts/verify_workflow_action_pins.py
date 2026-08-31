@@ -192,27 +192,100 @@ def _key_facts(tokens: list[YamlToken], index: int) -> tuple[bool, bool]:
     return decoded.casefold() == "uses", False
 
 
-def _flow_key_facts(tokens: list[YamlToken], start: int) -> tuple[bool, bool]:
+def _flow_candidate_facts(
+    text: str,
+    tokens: list[YamlToken],
+    start: int,
+    end: int,
+) -> tuple[bool, bool]:
+    """Classify one flow mapping key while preserving plain-scalar spaces."""
+    candidate = tokens[start:end]
+    index = _skip_properties(candidate, 0)
+    scalar = candidate[index:]
+    if not scalar:
+        return False, False
+    if any(token[0] in {"explicit", "alias", "unterminated-quoted"} for token in scalar):
+        return False, True
+    if len(scalar) == 1:
+        decoded = _decoded_key(scalar[0])
+        if decoded is None:
+            return False, True
+        return decoded.casefold() == "uses", False
+    if all(token[0] == "plain" for token in scalar):
+        decoded = text[scalar[0][2] : scalar[-1][3]].strip()
+        return decoded.casefold() == "uses", False
+    return False, True
+
+
+def _flow_key_facts(
+    text: str,
+    tokens: list[YamlToken],
+    start: int,
+) -> tuple[bool, bool]:
+    """Classify keys in nested flow collections without splitting plain keys."""
     has_uses = False
     has_unsupported = False
+    contexts: list[dict[str, int | str | bool]] = []
+
     for index in range(start, len(tokens)):
         kind = tokens[index][0]
-        if kind == "explicit":
-            previous = index - 1
-            while previous >= start and tokens[previous][0] in PROPERTY_TOKEN_KINDS:
-                previous -= 1
-            if previous < start or tokens[previous][0] in "[{,":
-                has_unsupported = True
+        if kind in "[{":
+            contexts.append(
+                {
+                    "kind": kind,
+                    "entry_start": index + 1,
+                    "expecting_key": kind == "{",
+                }
+            )
             continue
-        uses, unsupported = _key_facts(tokens, index)
-        has_uses = has_uses or uses
-        has_unsupported = has_unsupported or unsupported
+        if kind in "]}":
+            if contexts:
+                contexts.pop()
+            continue
+        if not contexts:
+            continue
+
+        context = contexts[-1]
+        if kind == ",":
+            context["entry_start"] = index + 1
+            context["expecting_key"] = context["kind"] == "{"
+            continue
+        if kind == ":":
+            uses, unsupported = _flow_candidate_facts(
+                text,
+                tokens,
+                int(context["entry_start"]),
+                index,
+            )
+            has_uses = has_uses or uses
+            has_unsupported = has_unsupported or unsupported
+            context["entry_start"] = index + 1
+            context["expecting_key"] = False
+            continue
+        if (
+            kind == "unterminated-quoted"
+            and context["kind"] == "{"
+            and context["expecting_key"]
+        ):
+            has_unsupported = True
+
     return has_uses, has_unsupported
 
 
 def _line_tokens(line: str) -> tuple[int, int, list[YamlToken]]:
     leading = len(line) - len(line.lstrip(" "))
     position = leading
+    if (
+        leading == 0
+        and line.startswith("---", position)
+        and (
+            position + 3 == len(line)
+            or line[position + 3].isspace()
+        )
+    ):
+        position += 3
+        while position < len(line) and line[position].isspace():
+            position += 1
     if position < len(line) and line[position] == "-" and (
         position + 1 == len(line) or line[position + 1].isspace()
     ):
@@ -225,20 +298,22 @@ def _line_tokens(line: str) -> tuple[int, int, list[YamlToken]]:
 def _line_key_facts(line: str) -> tuple[bool, bool]:
     """Classify structural mapping keys without scanning scalar values."""
     _, _, tokens = _line_tokens(line)
-    if any(token[0] == "unterminated-quoted" for token in tokens):
-        return False, True
     key_index = _skip_properties(tokens, 0)
     if key_index >= len(tokens):
         return False, False
     if tokens[key_index][0] in "[{":
-        return _flow_key_facts(tokens, key_index)
+        return _flow_key_facts(line, tokens, key_index)
 
     has_uses, has_unsupported = _key_facts(tokens, key_index)
     if not _has_mapping_colon(tokens, key_index):
         return has_uses, has_unsupported
     value_index = _skip_properties(tokens, key_index + 2)
     if value_index < len(tokens) and tokens[value_index][0] in "[{":
-        flow_uses, flow_unsupported = _flow_key_facts(tokens, value_index)
+        flow_uses, flow_unsupported = _flow_key_facts(
+            line,
+            tokens,
+            value_index,
+        )
         has_uses = has_uses or flow_uses
         has_unsupported = has_unsupported or flow_unsupported
     return has_uses, has_unsupported
