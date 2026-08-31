@@ -25,6 +25,15 @@ class WorkflowActionPinTests(unittest.TestCase):
             )
             return validation_errors(workflow_directory)
 
+    def _validate_raw_workflow(self, content: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workflow_directory = Path(temporary_directory)
+            (workflow_directory / "fixture.yml").write_text(
+                content,
+                encoding="utf-8",
+            )
+            return validation_errors(workflow_directory)
+
     def _validate_repository(
         self,
         workflow_body: str,
@@ -297,6 +306,32 @@ class WorkflowActionPinTests(unittest.TestCase):
             + "      echo '{ ? uses: actions/checkout@v4 }'\n"
             + "      echo '[ *ptr: value ]'\n"
             + "      echo 'uses: actions/checkout@v4'",
+        )
+        self.assertEqual(errors, [])
+
+    def test_document_marker_before_flow_root_is_scanned(self) -> None:
+        errors = self._validate_raw_workflow(
+            "--- {jobs: {pwn: {runs-on: ubuntu-latest, "
+            "steps: [{uses: actions/checkout@v4}]}}}\n"
+        )
+        self.assertTrue(
+            any("workflow action uses entries must" in error for error in errors),
+            errors,
+        )
+
+    def test_multiline_quoted_value_is_not_treated_as_a_key(self) -> None:
+        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
+        errors = self._validate_line(
+            "fixture.yml",
+            canonical + '\n  - run: "echo\n      hello"',
+        )
+        self.assertEqual(errors, [])
+
+    def test_multiword_flow_plain_key_is_not_split_into_uses(self) -> None:
+        canonical = f"- uses: {BUILD_PUSH_ACTION}@{VALID_REVISION} # {VALID_VERSION}"
+        errors = self._validate_line(
+            "fixture.yml",
+            canonical + "\n  - {not uses: harmless}",
         )
         self.assertEqual(errors, [])
 
