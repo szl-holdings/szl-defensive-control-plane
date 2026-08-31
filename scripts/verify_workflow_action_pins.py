@@ -319,6 +319,18 @@ def _line_key_facts(line: str) -> tuple[bool, bool]:
     return has_uses, has_unsupported
 
 
+def _multiline_value_start(line: str) -> int | None:
+    """Return the opening quote for a continued value, never for a key."""
+    _, _, tokens = _line_tokens(line)
+    has_uses, has_unsupported = _line_key_facts(line)
+    if has_uses or has_unsupported:
+        return None
+    for kind, _, start, _ in tokens:
+        if kind == "unterminated-quoted":
+            return start
+    return None
+
+
 def _block_scalar_header(line: str) -> tuple[int, int | None] | None:
     """Return base indentation and optional explicit content indentation."""
     leading, key_column, tokens = _line_tokens(line)
@@ -451,10 +463,25 @@ def validation_errors(workflow_directory: Path) -> list[str]:
         display_path = _display_path(path, repository_root)
         block_scalar_base: int | None = None
         block_scalar_content: int | None = None
+        quoted_value: str | None = None
+        quoted_value_line = 0
+        quoted_value_start = 0
 
         for line_number, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(), start=1
         ):
+            if quoted_value is not None:
+                quoted_value += "\n" + line
+                _, closed = _quoted_scalar_end(
+                    quoted_value,
+                    quoted_value_start,
+                )
+                if not closed:
+                    continue
+                line = quoted_value
+                line_number = quoted_value_line
+                quoted_value = None
+
             if block_scalar_base is not None:
                 if not line.strip() or line.lstrip().startswith("#"):
                     continue
@@ -485,6 +512,11 @@ def validation_errors(workflow_directory: Path) -> list[str]:
                 )
                 continue
             if not has_uses_key:
+                continued_value = _multiline_value_start(line)
+                if continued_value is not None:
+                    quoted_value = line
+                    quoted_value_line = line_number
+                    quoted_value_start = continued_value
                 continue
 
             local_match = LOCAL_REFERENCE.fullmatch(line)
