@@ -1,0 +1,234 @@
+name: Materialize tenant integration truth once
+
+on:
+  push:
+    branches:
+      - feat/tenant-integration-fabric-v1
+    paths:
+      - .github/workflows/materialize-tenant-integration-truth-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-tenant-integration-truth-once
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact integration branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/tenant-integration-fabric-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Bind permanent repository truth to implemented software
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object README.md)" = 8f8ab8d32a662de77118a172adc8856726f62393
+          test "$(git hash-object verify.py)" = e7fbcd798c2b2497bdd9ad065e292855205d128d
+          test "$(git hash-object defensive_control_plane/__main__.py)" = 3d40963053c6cdb52f82c6b03b7d311c8d9b30cd
+          python - <<'PY'
+          from pathlib import Path
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+          replacements = {
+              """Version 0.4.0 has two intentionally separate surfaces:
+
+- The Python library implements the complete local event-to-case-to-approved
+  fake-ticket vertical slice.
+- The HTTP service is read-only and exposes only liveness, readiness, build
+  identity, and lane status. It exposes no ingestion, approval, execution, or
+  other mutation endpoint.
+""": """Version 0.4.0 has three intentionally separate surfaces:
+
+- The Python library implements the complete local event-to-case-to-approved
+  fake-ticket vertical slice.
+- The original HTTP service is read-only and exposes only liveness, readiness,
+  build identity, and lane status. It exposes no ingestion, approval, execution,
+  or other mutation endpoint.
+- The tenant integration fabric validates provider bindings, reports credential
+  readiness without egress, performs only explicit bounded observations, and
+  exposes a separate status-only HTTP service that never calls a provider.
+""",
+              """The implementation uses Python's standard library and SQLite at runtime. The
+only local connector is `FakeTicketConnector`; real identity, endpoint, SIEM,
+email, cloud, and ticketing connectors remain unavailable until separately
+implemented, reviewed, configured, and observed.
+""": """The implementation uses Python's standard library and SQLite at runtime.
+`FakeTicketConnector` remains the only executable response effector. The tenant
+integration fabric now implements read-only observation adapters for Microsoft
+Defender XDR, Entra ID, Intune, Sentinel, Defender for Cloud, CrowdStrike, Wiz,
+Okta, AWS Security Hub, Google Security Command Center, ServiceNow, Jira, and
+administrator-approved CMDB/SIEM endpoints. Every binding remains `DISABLED` or
+`AUTH_REQUIRED` until a tenant supplies an approved credential and a bounded
+observation succeeds; no adapter is silently called live.
+""",
+              """The current image needs no application egress. Real provider connectors,
+managed backups, key rotation, authenticated mutation APIs, and off-host
+evidence storage require distinct reviewed changes and narrowly scoped network
+policy.
+""": """The default image and both status services need no application egress. Provider
+egress occurs only when an operator explicitly invokes `defensive-integrations
+observe` for an enabled tenant binding. That deployment must admit only the
+binding's fixed provider origin. Managed backups, key rotation, authenticated
+mutation APIs, write-capable provider actions, and off-host evidence storage
+remain distinct reviewed changes with separate authorization and network policy.
+""",
+              """- `UNAVAILABLE`: real external integrations without current observations.
+""": """- `AUTH_REQUIRED`: an adapter and tenant binding exist, but no approved credential
+  and successful provider observation have been established.
+- `OBSERVED`: a bounded read-only provider call returned valid JSON and produced
+  a secret-free hash receipt; this grants no write authority.
+- `UNAVAILABLE`: the provider transport or response contract failed closed.
+""",
+          }
+          for old, new in replacements.items():
+              if readme.count(old) != 1:
+                  raise SystemExit(f"README truth target drifted: {old[:80]!r}")
+              readme = readme.replace(old, new, 1)
+
+          marker = "## HTTP contract\n"
+          section = """## Tenant integration fabric
+
+The read-only provider fabric and its exact credential boundary are documented
+in [`docs/TENANT_INTEGRATIONS.md`](docs/TENANT_INTEGRATIONS.md). A complete,
+loadable, disabled-by-default configuration is provided at
+`docs/integrations-manifest.example.json`.
+
+```powershell
+defensive-integrations validate --manifest integrations.json
+defensive-integrations status --manifest integrations.json
+defensive-integrations observe --manifest integrations.json --tenant tenant:example --provider microsoft_defender_xdr
+defensive-integrations serve --manifest integrations.json --mode local --host 127.0.0.1 --port 8090
+```
+
+`validate`, `status`, and the status-only HTTP service perform no provider
+egress. `observe` is the sole explicit egress command. Observation receipts
+contain hashes, counts, timing, and request identity only—never provider records
+or credential values. All adapters preserve `external_writes=DISABLED` and
+`effectors=[]`.
+
+"""
+          if readme.count(marker) != 1 or "## Tenant integration fabric" in readme:
+              raise SystemExit("README integration section target drifted")
+          readme = readme.replace(marker, section + marker, 1)
+          readme_path.write_text(readme, encoding="utf-8")
+
+          main_path = Path("defensive_control_plane/__main__.py")
+          main = main_path.read_text(encoding="utf-8")
+          old = '            "externalConnectors": "UNAVAILABLE",\n'
+          new = '            "externalConnectors": "IMPLEMENTED_AUTH_REQUIRED",\n'
+          if main.count(old) != 1:
+              raise SystemExit("demo connector truth target drifted")
+          main_path.write_text(main.replace(old, new, 1), encoding="utf-8")
+
+          verify_path = Path("verify.py")
+          verify = verify_path.read_text(encoding="utf-8")
+          old_anchor = """    manifest = source_manifest()
+"""
+          new_anchor = """    integration_status: dict[str, Any] | None = None
+    integration_error: str | None = None
+    try:
+        from defensive_control_plane.integrations import GovernedIntegrationPlane
+
+        integration_plane = GovernedIntegrationPlane.from_json_file(
+            ROOT / "docs" / "integrations-manifest.example.json"
+        )
+        integration_status = integration_plane.statuses()
+    except Exception as exc:  # receipt must record a closed failure, never hide it
+        integration_error = f"{type(exc).__name__}: {exc}"
+
+    manifest = source_manifest()
+"""
+          if verify.count(old_anchor) != 1:
+              raise SystemExit("verification integration anchor drifted")
+          verify = verify.replace(old_anchor, new_anchor, 1)
+          old_pass = """        and demo.get("restoreDrill", {}).get("state") == "VERIFIED_LOCAL"
+    )
+"""
+          new_pass = """        and demo.get("restoreDrill", {}).get("state") == "VERIFIED_LOCAL"
+        and integration_status is not None
+        and integration_status.get("state") == "DISABLED"
+        and integration_status.get("connector_count") == 14
+        and integration_status.get("external_writes") == "DISABLED"
+        and integration_status.get("effectors") == []
+    )
+"""
+          if verify.count(old_pass) != 1:
+              raise SystemExit("verification pass predicate drifted")
+          verify = verify.replace(old_pass, new_pass, 1)
+          replacements = {
+              '        "scope": "local-python-sqlite-fake-connector",\n': '        "scope": "local-python-sqlite-fake-connector-plus-provider-adapters",\n',
+              '        "externalConnectors": "UNAVAILABLE",\n': '        "externalConnectors": "IMPLEMENTED_AUTH_REQUIRED",\n',
+              '        "deployedRuntime": "UNAVAILABLE",\n': '        "integrationFabric": integration_status,\n        "integrationError": integration_error,\n        "deployedRuntime": "UNAVAILABLE",\n',
+          }
+          for old, new in replacements.items():
+              if verify.count(old) != 1:
+                  raise SystemExit(f"verification truth target drifted: {old.strip()}")
+              verify = verify.replace(old, new, 1)
+          verify_path.write_text(verify, encoding="utf-8")
+          PY
+
+      - name: Prove package, manifest, CLI, server, and receipt contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m json.tool docs/integrations-manifest.example.json >/dev/null
+          python -B -m py_compile \
+            defensive_control_plane/integrations.py \
+            defensive_control_plane/integration_cli.py \
+            defensive_control_plane/integration_status_server.py \
+            defensive_control_plane/__init__.py \
+            defensive_control_plane/__main__.py \
+            verify.py
+          python -B -m unittest discover -s tests -v
+          python -B verify.py
+          python -B -m defensive_control_plane.integration_cli validate \
+            --manifest docs/integrations-manifest.example.json > /tmp/integration-validate.json
+          python -B -m defensive_control_plane.integration_cli status \
+            --manifest docs/integrations-manifest.example.json > /tmp/integration-status.json
+          python - <<'PY'
+          import json
+
+          validated = json.load(open("/tmp/integration-validate.json", encoding="utf-8"))
+          status = json.load(open("/tmp/integration-status.json", encoding="utf-8"))
+          receipt = json.load(open("evidence/local-verification.json", encoding="utf-8"))
+          assert validated["state"] == "VALID"
+          assert validated["binding_count"] == 14
+          assert status["state"] == "DISABLED"
+          assert status["connector_count"] == 14
+          assert status["external_writes"] == "DISABLED"
+          assert status["effectors"] == []
+          assert receipt["state"] == "VERIFIED_LOCAL"
+          assert receipt["externalConnectors"] == "IMPLEMENTED_AUTH_REQUIRED"
+          assert receipt["integrationFabric"]["connector_count"] == 14
+          assert receipt["productionOperational"] is False
+          PY
+          git diff --check HEAD
+
+      - name: Remove bootstrap and commit clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/materialize-tenant-integration-truth-once.yml
+          git diff --check HEAD
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'docs(integrations): bind provider fabric to local verification' \
+            -m 'Record the fourteen implemented adapters as disabled/auth-required until tenant credentials and successful observations exist, and retain zero external-write authority.' \
+            -m 'Signed-off-by: Stephen Lutar <stephenlutar2@gmail.com>'
+          git push origin HEAD:feat/tenant-integration-fabric-v1
