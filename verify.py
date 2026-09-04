@@ -121,6 +121,18 @@ def main() -> int:
         else:
             demo_error = (demo_process.stderr or demo_process.stdout).strip()
 
+    integration_status: dict[str, Any] | None = None
+    integration_error: str | None = None
+    try:
+        from defensive_control_plane.integrations import GovernedIntegrationPlane
+
+        integration_plane = GovernedIntegrationPlane.from_json_file(
+            ROOT / "docs" / "integrations-manifest.example.json"
+        )
+        integration_status = integration_plane.statuses()
+    except Exception as exc:  # receipt must record a closed failure, never hide it
+        integration_error = f"{type(exc).__name__}: {exc}"
+
     manifest = source_manifest()
     manifest_digest = hashlib.sha256(
         json.dumps(
@@ -139,12 +151,17 @@ def main() -> int:
         and demo.get("connectorCalls") == 1
         and demo.get("dryRunMutationCalls") == 0
         and demo.get("restoreDrill", {}).get("state") == "VERIFIED_LOCAL"
+        and integration_status is not None
+        and integration_status.get("state") == "DISABLED"
+        and integration_status.get("connector_count") == 14
+        and integration_status.get("external_writes") == "DISABLED"
+        and integration_status.get("effectors") == []
     )
     report: dict[str, Any] = {
         "schema": "LocalDefensiveControlPlaneVerificationV2",
         "observedAt": observed_at,
         "state": "VERIFIED_LOCAL" if passed else "FAILED_CLOSED",
-        "scope": "local-python-sqlite-fake-connector",
+        "scope": "local-python-sqlite-fake-connector-plus-provider-adapters",
         "python": sys.version,
         "pythonExecutable": Path(sys.executable).name,
         "testCommand": "python -B -m unittest discover -s tests -v",
@@ -158,7 +175,9 @@ def main() -> int:
         "sourceManifestDigest": manifest_digest,
         "repository": repository,
         "productionOperational": False,
-        "externalConnectors": "UNAVAILABLE",
+        "externalConnectors": "IMPLEMENTED_AUTH_REQUIRED",
+        "integrationFabric": integration_status,
+        "integrationError": integration_error,
         "deployedRuntime": "UNAVAILABLE",
     }
     atomic_write_json(REPORT_PATH, report)

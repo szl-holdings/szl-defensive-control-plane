@@ -9,18 +9,25 @@ It is not an exploit payload, remote administration tool, arbitrary command
 runner, or authorization to operate against systems outside an approved
 defensive scope.
 
-Version 0.4.0 has two intentionally separate surfaces:
+Version 0.4.0 has three intentionally separate surfaces:
 
 - The Python library implements the complete local event-to-case-to-approved
   fake-ticket vertical slice.
-- The HTTP service is read-only and exposes only liveness, readiness, build
-  identity, and lane status. It exposes no ingestion, approval, execution, or
-  other mutation endpoint.
+- The original HTTP service is read-only and exposes only liveness, readiness,
+  build identity, and lane status. It exposes no ingestion, approval, execution,
+  or other mutation endpoint.
+- The tenant integration fabric validates provider bindings, reports credential
+  readiness without egress, performs only explicit bounded observations, and
+  exposes a separate status-only HTTP service that never calls a provider.
 
-The implementation uses Python's standard library and SQLite at runtime. The
-only local connector is `FakeTicketConnector`; real identity, endpoint, SIEM,
-email, cloud, and ticketing connectors remain unavailable until separately
-implemented, reviewed, configured, and observed.
+The implementation uses Python's standard library and SQLite at runtime.
+`FakeTicketConnector` remains the only executable response effector. The tenant
+integration fabric now implements read-only observation adapters for Microsoft
+Defender XDR, Entra ID, Intune, Sentinel, Defender for Cloud, CrowdStrike, Wiz,
+Okta, AWS Security Hub, Google Security Command Center, ServiceNow, Jira, and
+administrator-approved CMDB/SIEM endpoints. Every binding remains `DISABLED` or
+`AUTH_REQUIRED` until a tenant supplies an approved credential and a bounded
+observation succeeds; no adapter is silently called live.
 
 ## Local verification
 
@@ -83,6 +90,26 @@ must remain behind an authenticated service-mesh or reverse-proxy boundary and
 a default-deny network policy. Do not expose the standard-library server
 directly through a public ingress. Kubernetes probes must send one of the
 configured trusted Host values.
+
+## Tenant integration fabric
+
+The read-only provider fabric and its exact credential boundary are documented
+in [`docs/TENANT_INTEGRATIONS.md`](docs/TENANT_INTEGRATIONS.md). A complete,
+loadable, disabled-by-default configuration is provided at
+`docs/integrations-manifest.example.json`.
+
+```powershell
+defensive-integrations validate --manifest integrations.json
+defensive-integrations status --manifest integrations.json
+defensive-integrations observe --manifest integrations.json --tenant tenant:example --provider microsoft_defender_xdr
+defensive-integrations serve --manifest integrations.json --mode local --host 127.0.0.1 --port 8090
+```
+
+`validate`, `status`, and the status-only HTTP service perform no provider
+egress. `observe` is the sole explicit egress command. Observation receipts
+contain hashes, counts, timing, and request identity only—never provider records
+or credential values. All adapters preserve `external_writes=DISABLED` and
+`effectors=[]`.
 
 ## HTTP contract
 
@@ -188,10 +215,12 @@ The two signing keys are read at startup. Rotation must retain key IDs and old
 verification material or migrate the evidence format; replacing an evidence
 key blindly makes historical signatures unverifiable.
 
-The current image needs no application egress. Real provider connectors,
-managed backups, key rotation, authenticated mutation APIs, and off-host
-evidence storage require distinct reviewed changes and narrowly scoped network
-policy.
+The default image and both status services need no application egress. Provider
+egress occurs only when an operator explicitly invokes `defensive-integrations
+observe` for an enabled tenant binding. That deployment must admit only the
+binding's fixed provider origin. Managed backups, key rotation, authenticated
+mutation APIs, write-capable provider actions, and off-host evidence storage
+remain distinct reviewed changes with separate authorization and network policy.
 
 ## Truth boundary
 
@@ -200,7 +229,11 @@ A passing source suite can establish only the behavior it directly observes:
 - `VERIFIED_LOCAL`: Python, SQLite, fake connector, and local HTTP behavior.
 - `MODELED`: the fake ticket connector's representation of an external action.
 - `PARTIAL`: source/build identity without deployed-runtime attestation.
-- `UNAVAILABLE`: real external integrations without current observations.
+- `AUTH_REQUIRED`: an adapter and tenant binding exist, but no approved credential
+  and successful provider observation have been established.
+- `OBSERVED`: a bounded read-only provider call returned valid JSON and produced
+  a secret-free hash receipt; this grants no write authority.
+- `UNAVAILABLE`: the provider transport or response contract failed closed.
 
 A passing pull request is source-admission evidence. A published image is
 artifact evidence. A deployed digest is deployment evidence. Healthy endpoints

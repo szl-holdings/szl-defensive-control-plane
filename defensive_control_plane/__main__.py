@@ -124,7 +124,7 @@ def run_demo() -> dict[str, Any]:
             "restoreDrill": restore,
             "lanes": plane.lane_statuses(),
             "productionOperational": False,
-            "externalConnectors": "UNAVAILABLE",
+            "externalConnectors": "IMPLEMENTED_AUTH_REQUIRED",
         }
 
 
