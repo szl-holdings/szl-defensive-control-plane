@@ -935,6 +935,8 @@ def _join_url(base_url: str, path: str) -> str:
 def _endpoint_fingerprint(url: str) -> str:
     parsed = urllib.parse.urlsplit(url)
     value = f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
+    if parsed.query:
+        value = f"{value}?{parsed.query}"
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
