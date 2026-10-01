@@ -13,6 +13,8 @@ BUILD_PUSH_ACTION = "docker/build-push-action"
 VERIFIED_BUILD_PUSH_REVISIONS = {
     # Official lightweight tag verified from docker/build-push-action on 2026-08-26.
     "v7.3.0": "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
+    # Official lightweight tag verified from docker/build-push-action on 2026-10-01.
+    "v7.4.0": "c3c9e263c25d99ce0380d002d59b67737d91b0dc",
 }
 WORKFLOW_SUFFIXES = frozenset({".yml", ".yaml"})
 BLOCK_SCALAR_INDICATOR = re.compile(
