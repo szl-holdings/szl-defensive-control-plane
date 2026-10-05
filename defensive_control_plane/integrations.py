@@ -586,7 +586,7 @@ class GovernedIntegrationPlane:
         partition = binding.resources.get("partition", "aws")
         suffix = "amazonaws.com.cn" if partition == "aws-cn" else "amazonaws.com"
         host = f"securityhub.{region}.{suffix}"
-        url = f"https://{host}/"
+        url = f"https://{host}/findings"
         body = _canonical_json({"MaxResults": min(MAX_RECORDS, 100)})
         now = self.clock().astimezone(timezone.utc)
         headers = _aws_sigv4_headers(
@@ -600,8 +600,7 @@ class GovernedIntegrationPlane:
             session_token=secrets.get("session_token"),
             now=now,
             extra_headers={
-                "content-type": "application/x-amz-json-1.1",
-                "x-amz-target": "AWSSecurityHub_20181127.GetFindings",
+                "content-type": "application/json",
             },
         )
         headers["Accept"] = "application/json"
