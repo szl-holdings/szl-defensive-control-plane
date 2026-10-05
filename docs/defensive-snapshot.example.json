@@ -1,0 +1,77 @@
+{
+  "schema": "DefensivePlanningSnapshotV1",
+  "tenantId": "tenant:sample",
+  "scope": {
+    "assetIds": ["asset:sample-service"],
+    "identityIds": ["identity:sample-operator"],
+    "assetDenominator": 1,
+    "identityDenominator": 1,
+    "complete": true
+  },
+  "evidence": [
+    {
+      "id": "evidence:inventory",
+      "tenantId": "tenant:sample",
+      "kind": "inventory",
+      "subjectId": "tenant:sample",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"observedAssetIds": ["asset:sample-service"]}
+    },
+    {
+      "id": "evidence:identity",
+      "tenantId": "tenant:sample",
+      "kind": "identity",
+      "subjectId": "identity:sample-operator",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"mfaEnabled": false, "active": false, "successfulAuthentication": true}
+    },
+    {
+      "id": "evidence:detection",
+      "tenantId": "tenant:sample",
+      "kind": "detection",
+      "subjectId": "asset:sample-service",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"telemetryComplete": true, "eventCount": 5, "ruleValidationPassed": true}
+    },
+    {
+      "id": "evidence:dependency",
+      "tenantId": "tenant:sample",
+      "kind": "dependency",
+      "subjectId": "asset:sample-service",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"packageId": "package:sample-library", "installedVersion": "1.0.0", "findingVersion": "1.0.0", "findingId": "finding:synthetic-example", "vulnerable": true}
+    },
+    {
+      "id": "evidence:response",
+      "tenantId": "tenant:sample",
+      "kind": "response",
+      "subjectId": "tenant:sample",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"planDocumented": true, "exercisePassed": null}
+    },
+    {
+      "id": "evidence:backup",
+      "tenantId": "tenant:sample",
+      "kind": "backup",
+      "subjectId": "asset:sample-service",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"backupJobSucceeded": true, "restoreSucceeded": false, "restoreDurationSeconds": 300, "rtoTargetSeconds": 600, "rpoTargetSeconds": 3600, "recoveryPointAsOf": "2026-10-04T23:00:00Z", "recoveryReferenceAsOf": null}
+    },
+    {
+      "id": "evidence:integrity",
+      "tenantId": "tenant:sample",
+      "kind": "evidence",
+      "subjectId": "tenant:sample",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"integrityCheckPassed": true, "sourceBindingComplete": false}
+    },
+    {
+      "id": "evidence:governance",
+      "tenantId": "tenant:sample",
+      "kind": "governance",
+      "subjectId": "tenant:sample",
+      "source": {"id": "source:synthetic-fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "classification": "SAMPLE", "sourceAsOf": "2026-10-05T00:00:00Z"},
+      "facts": {"ownerAssigned": true, "reviewCurrent": true}
+    }
+  ]
+}
