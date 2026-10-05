@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import unittest
 from datetime import datetime, timezone
@@ -265,38 +267,141 @@ class TenantIntegrationFabricTests(unittest.TestCase):
         self.assertIn("query SzlReadOnlyIssues", body["query"])
         self.assertNotIn("mutation", body["query"].lower())
 
-    def test_aws_security_hub_sigv4_is_deterministic_and_bound_to_region(self) -> None:
-        resolver = RecordingResolver(
-            {
-                "env://AWS_ACCESS_KEY_ID": "AKIDEXAMPLE",
-                "env://AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
-                "env://AWS_SESSION_TOKEN": "session-token",
-            }
-        )
-        binding = {
-            "tenant_id": "tenant:alpha",
-            "provider_id": "aws_security_hub",
-            "enabled": True,
-            "resources": {"region": "us-east-1", "partition": "aws"},
-            "secret_refs": {
-                "access_key_id": "env://AWS_ACCESS_KEY_ID",
-                "secret_access_key": "env://AWS_SECRET_ACCESS_KEY",
-                "session_token": "env://AWS_SESSION_TOKEN",
-            },
+    def test_aws_security_hub_get_findings_contract_and_sigv4(self) -> None:
+        # Fixed, synthetic credentials and a recording transport keep this offline.
+        for region, partition, suffix in (
+            ("us-east-1", "aws", "amazonaws.com"),
+            ("us-gov-west-1", "aws-us-gov", "amazonaws.com"),
+            ("cn-north-1", "aws-cn", "amazonaws.com.cn"),
+        ):
+            for session_token in (None, "session-token"):
+                with self.subTest(region=region, session_token=session_token):
+                    values = {
+                        "env://AWS_ACCESS_KEY_ID": "AKIDEXAMPLE",
+                        "env://AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
+                    }
+                    secret_refs = {
+                        "access_key_id": "env://AWS_ACCESS_KEY_ID",
+                        "secret_access_key": "env://AWS_SECRET_ACCESS_KEY",
+                    }
+                    if session_token is not None:
+                        values["env://AWS_SESSION_TOKEN"] = session_token
+                        secret_refs["session_token"] = "env://AWS_SESSION_TOKEN"
+                    binding = {
+                        "tenant_id": "tenant:alpha",
+                        "provider_id": "aws_security_hub",
+                        "enabled": True,
+                        "resources": {"region": region, "partition": partition},
+                        "secret_refs": secret_refs,
+                    }
+                    transport = RecordingTransport()
+                    plane = GovernedIntegrationPlane(
+                        manifest(binding),
+                        secret_resolver=RecordingResolver(values),
+                        transport=transport,
+                        clock=lambda: FIXED_TIME,
+                    )
+                    first = plane.build_request_plan(plane.manifest.bindings[0])
+                    second = plane.build_request_plan(plane.manifest.bindings[0])
+                    host = f"securityhub.{region}.{suffix}"
+                    expected_url = f"https://{host}/findings"
+                    self.assertEqual(first.method, "POST")
+                    self.assertEqual(first.semantic_operation, "READ")
+                    self.assertEqual(first.url, expected_url)
+                    self.assertEqual(first.body, b'{"MaxResults":100}')
+                    self.assertEqual(first.headers["Content-Type"], "application/json")
+                    self.assertEqual(first.headers["Accept"], "application/json")
+                    self.assertEqual(first.headers["Host"], host)
+                    self.assertEqual(first.headers["X-Amz-Date"], "20260904T033000Z")
+                    self.assertNotIn("x-amz-target", {name.lower() for name in first.headers})
+                    self.assertEqual(
+                        first.endpoint_fingerprint,
+                        hashlib.sha256(expected_url.encode("utf-8")).hexdigest(),
+                    )
+                    if session_token is None:
+                        self.assertNotIn("X-Amz-Security-Token", first.headers)
+                    else:
+                        self.assertEqual(first.headers["X-Amz-Security-Token"], session_token)
+
+                    # Independently specify the documented REST request, rather than
+                    # asking the production signer to generate its own expected value.
+                    signed_headers = "content-type;host;x-amz-date"
+                    canonical_headers = (
+                        "content-type:application/json\n"
+                        f"host:{host}\n"
+                        "x-amz-date:20260904T033000Z\n"
+                    )
+                    if session_token is not None:
+                        signed_headers += ";x-amz-security-token"
+                        canonical_headers += f"x-amz-security-token:{session_token}\n"
+                    canonical_request = (
+                        "POST\n/findings\n\n"
+                        f"{canonical_headers}\n{signed_headers}\n"
+                        + hashlib.sha256(b'{"MaxResults":100}').hexdigest()
+                    )
+                    scope = f"20260904/{region}/securityhub/aws4_request"
+                    string_to_sign = (
+                        f"AWS4-HMAC-SHA256\n20260904T033000Z\n{scope}\n"
+                        + hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+                    )
+                    signing_key = b"AWS4test-secret-access-key"
+                    for component in ("20260904", region, "securityhub", "aws4_request"):
+                        signing_key = hmac.digest(signing_key, component.encode("ascii"), "sha256")
+                    signature = hmac.new(
+                        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
+                    ).hexdigest()
+                    self.assertEqual(
+                        first.headers["Authorization"],
+                        f"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/{scope}, "
+                        f"SignedHeaders={signed_headers}, Signature={signature}",
+                    )
+                    self.assertEqual(first, second)
+                    self.assertNotIn("test-secret-access-key", json.dumps(dict(first.headers)))
+                    self.assertEqual(transport.plans, [])
+
+    def test_aws_security_hub_disabled_or_missing_credentials_never_egress(self) -> None:
+        credentials = {
+            "env://AWS_ACCESS_KEY_ID": "AKIDEXAMPLE",
+            "env://AWS_SECRET_ACCESS_KEY": "test-secret-access-key",
         }
-        plane = GovernedIntegrationPlane(
-            manifest(binding),
-            secret_resolver=resolver,
-            transport=RecordingTransport(),
-            clock=lambda: FIXED_TIME,
-        )
-        first = plane.build_request_plan(plane.manifest.bindings[0])
-        second = plane.build_request_plan(plane.manifest.bindings[0])
-        self.assertEqual(first.headers["Authorization"], second.headers["Authorization"])
-        self.assertIn("Credential=AKIDEXAMPLE/20260904/us-east-1/securityhub/aws4_request", first.headers["Authorization"])
-        self.assertEqual(first.url, "https://securityhub.us-east-1.amazonaws.com/")
-        self.assertEqual(first.headers["X-Amz-Target"], "AWSSecurityHub_20181127.GetFindings")
-        self.assertNotIn("test-secret-access-key", json.dumps(dict(first.headers)))
+        for enabled, missing in (
+            (False, None),
+            (True, "env://AWS_ACCESS_KEY_ID"),
+            (True, "env://AWS_SECRET_ACCESS_KEY"),
+        ):
+            with self.subTest(enabled=enabled, missing=missing):
+                values = {key: value for key, value in credentials.items() if key != missing}
+                resolver = RecordingResolver(values)
+                transport = RecordingTransport()
+                binding = {
+                    "tenant_id": "tenant:alpha",
+                    "provider_id": "aws_security_hub",
+                    "enabled": enabled,
+                    "resources": {"region": "us-east-1"},
+                    "secret_refs": {
+                        "access_key_id": "env://AWS_ACCESS_KEY_ID",
+                        "secret_access_key": "env://AWS_SECRET_ACCESS_KEY",
+                    },
+                }
+                plane = GovernedIntegrationPlane(
+                    manifest(binding),
+                    secret_resolver=resolver,
+                    transport=transport,
+                    clock=lambda: FIXED_TIME,
+                )
+                report = plane.observe()
+                expected = IntegrationState.AUTH_REQUIRED if enabled else IntegrationState.DISABLED
+                self.assertEqual(report["state"], expected.value)
+                self.assertEqual(report["external_writes"], "DISABLED")
+                self.assertEqual(report["effectors"], [])
+                self.assertEqual(transport.plans, [])
+                if not enabled:
+                    self.assertEqual(resolver.references, [])
+                    with self.assertRaises(IntegrationValidationError):
+                        plane.build_request_plan(plane.manifest.bindings[0])
+                else:
+                    with self.assertRaises(AuthenticationRequired):
+                        plane.build_request_plan(plane.manifest.bindings[0])
 
     def test_gcp_okta_servicenow_and_jira_templates_are_bounded(self) -> None:
         resolver = RecordingResolver({"env://TEST_PROVIDER_TOKEN": "token-value"})
