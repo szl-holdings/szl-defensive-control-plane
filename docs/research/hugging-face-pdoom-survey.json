@@ -1,0 +1,78 @@
+{
+  "schema": "ResearchSourceQualificationV1",
+  "id": "hugging-face-pdoom-survey",
+  "reviewedAt": "2026-10-05T20:33:39Z",
+  "qualification": "UNQUALIFIED_RESEARCH_REFERENCE",
+  "source": {
+    "url": "https://huggingface.co/changelog/pdoom-survey",
+    "announcementDate": "2026-10-05",
+    "nature": "public_profile_opinion_survey",
+    "individualAnswerVisibility": "public_profile",
+    "evidenceClass": "DECLARED",
+    "retrievedPageSha256": "57248b57260b4f6f6a6b89607b7e099786726c9fc7d09d4f0b21f2508590532c"
+  },
+  "aggregateResults": {
+    "status": "UNAVAILABLE_IN_INSPECTED_SOURCES",
+    "announcedTiming": "two weeks after announcement",
+    "publicationDate": null,
+    "resultsUrl": null,
+    "datasetId": null,
+    "sampleSize": null,
+    "statistics": null
+  },
+  "apiQualification": {
+    "status": "NOT_DOCUMENTED_IN_INSPECTED_SOURCES",
+    "inspectedUrls": [
+      "https://huggingface.co/docs/hub/api",
+      "https://huggingface.co/.well-known/openapi.json"
+    ],
+    "openapiSha256": "8684ee59cdfd2792acfa93bbba8f9fccba6801403e888f4b28386609f1efad94",
+    "inspectedPathCount": 298,
+    "pathNameSearchTerms": ["pdoom", "survey"],
+    "matchingDocumentedPaths": [],
+    "surveyEndpoint": null,
+    "coverage": "Official announcement, Hub API documentation and this dated OpenAPI path inventory only; undocumented, other or later interfaces remain unknown."
+  },
+  "reuseLicense": {
+    "status": "NOT_ESTABLISHED",
+    "identifier": null,
+    "url": null
+  },
+  "interpretation": {
+    "measurementType": "self_reported_opinion",
+    "objectiveRiskProbability": null,
+    "rejectPremisePolicy": {
+      "category": "non_numeric_response",
+      "probability": null,
+      "convertToZero": false
+    },
+    "missingAnswerPolicy": {
+      "category": "unknown",
+      "probability": null,
+      "convertToZero": false
+    }
+  },
+  "boundaries": {
+    "humanReviewRequired": true,
+    "dataReuseApproved": false,
+    "individualAnswersCollected": false,
+    "profileScrapingEnabled": false,
+    "surveySubmissionEnabled": false,
+    "automatedIngestionEnabled": false,
+    "providerAdapterImplemented": false,
+    "influencesPosture": false,
+    "influencesSeverity": false,
+    "influencesReadiness": false,
+    "influencesResponse": false
+  },
+  "nextReview": {
+    "trigger": "human review of an official aggregate-results publication",
+    "scheduled": false,
+    "requiredEvidence": [
+      "official aggregate results and methodology",
+      "documented access contract if automated access is proposed",
+      "established reuse license or permission",
+      "human review of privacy, limitations and intended research use"
+    ]
+  }
+}
