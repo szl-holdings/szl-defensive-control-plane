@@ -944,7 +944,7 @@ def _record_count(payload: Any) -> int:
         return min(len(payload), MAX_RECORDS)
     if not isinstance(payload, Mapping):
         return 0
-    for key in ("value", "items", "findings", "Findings", "resources", "Resources", "result"):
+    for key in ("value", "items", "findings", "Findings", "resources", "Resources", "result", "issues"):
         value = payload.get(key)
         if isinstance(value, list):
             return min(len(value), MAX_RECORDS)
