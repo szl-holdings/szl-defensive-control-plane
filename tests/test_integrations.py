@@ -427,6 +427,39 @@ class TenantIntegrationFabricTests(unittest.TestCase):
         self.assertIn("/rest/api/3/search/jql", urls[3])
         self.assertTrue(all("limit" in url.lower() or "pageSize" in url or "maxResults" in url for url in urls))
 
+    def test_jira_enhanced_search_counts_issue_rows_within_the_existing_bound(self) -> None:
+        # /rest/api/3/search/jql returns issues[], not the Graph API's value[].
+        # A next-page token or provider total does not establish observed rows.
+        for count in (0, 2, 100, 105):
+            with self.subTest(count=count):
+                payload = {
+                    "issues": [
+                        {"id": str(index), "fields": {"summary": "PRIVATE ISSUE SENTINEL"}}
+                        for index in range(count)
+                    ],
+                    "isLast": False,
+                    "nextPageToken": "PRIVATE PAGE TOKEN",
+                    "total": 9999,
+                }
+                transport = RecordingTransport(payload)
+                plane = GovernedIntegrationPlane(
+                    manifest(graph_binding("jira_cloud", base_url="https://tenant.atlassian.net")),
+                    secret_resolver=RecordingResolver({"env://TEST_PROVIDER_TOKEN": "token-value"}),
+                    transport=transport,
+                    clock=lambda: FIXED_TIME,
+                )
+                report = plane.observe()
+                observation = report["observations"][0]
+                self.assertEqual(observation["state"], IntegrationState.OBSERVED.value)
+                self.assertEqual(observation["record_count"], min(count, 100))
+                self.assertEqual(len(transport.plans), 1)
+                self.assertEqual(transport.plans[0].method, "GET")
+                self.assertIn("/rest/api/3/search/jql?", transport.plans[0].url)
+                self.assertEqual(observation["external_writes"], "DISABLED")
+                self.assertNotIn("PRIVATE ISSUE SENTINEL", json.dumps(report))
+                self.assertNotIn("PRIVATE PAGE TOKEN", json.dumps(report))
+                self.assertNotIn("token-value", json.dumps(report))
+
     def test_observation_records_hashes_and_counts_but_discards_provider_payload(self) -> None:
         resolver = RecordingResolver({"env://TEST_PROVIDER_TOKEN": "token-value"})
         payload = {"value": [{"id": "sensitive-1", "secret": "discard-me"}]}

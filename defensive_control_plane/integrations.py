@@ -308,7 +308,7 @@ class StdlibJsonTransport:
                 raw.decode("utf-8"),
                 parse_constant=lambda value: (_raise_invalid_constant(value)),
             )
-        except (UnicodeError, json.JSONDecodeError, IntegrationValidationError):
+        except (UnicodeError, ValueError, RecursionError, IntegrationValidationError):
             raise ProviderTransportError(
                 f"{plan.provider_id} returned invalid JSON"
             ) from None
@@ -944,7 +944,7 @@ def _record_count(payload: Any) -> int:
         return min(len(payload), MAX_RECORDS)
     if not isinstance(payload, Mapping):
         return 0
-    for key in ("value", "items", "findings", "Findings", "resources", "Resources", "result"):
+    for key in ("value", "items", "findings", "Findings", "resources", "Resources", "result", "issues"):
         value = payload.get(key)
         if isinstance(value, list):
             return min(len(value), MAX_RECORDS)
