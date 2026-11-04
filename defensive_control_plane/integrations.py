@@ -308,7 +308,7 @@ class StdlibJsonTransport:
                 raw.decode("utf-8"),
                 parse_constant=lambda value: (_raise_invalid_constant(value)),
             )
-        except (UnicodeError, json.JSONDecodeError, IntegrationValidationError):
+        except (UnicodeError, ValueError, RecursionError, IntegrationValidationError):
             raise ProviderTransportError(
                 f"{plan.provider_id} returned invalid JSON"
             ) from None
