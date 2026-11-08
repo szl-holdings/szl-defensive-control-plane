@@ -264,3 +264,5 @@ exploit procedure, customer data, or unpatched vulnerability detail.
 
 Copyright 2026 SZL Holdings. Licensed under the Apache License, Version 2.0.
 See [LICENSE](LICENSE).
+
+Estate on Hugging Face: models, datasets and Spaces are published under the [SZLHOLDINGS](https://huggingface.co/SZLHOLDINGS) org.
