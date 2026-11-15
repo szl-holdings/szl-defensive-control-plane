@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please credit SZL Holdings."
+title: "szl-defensive-control-plane - Evidence-bound defensive security control plane for signed event ingestion, governed response, and tamper-evident case evidence (SZL Holdings governed-AI estate)"
+authors:
+  - name: SZL Holdings
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/szl-holdings/szl-defensive-control-plane"
+keywords:
+  - governed-ai
+  - provenance
+  - szl-holdings
