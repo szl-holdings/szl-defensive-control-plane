@@ -57,6 +57,15 @@ class ProviderJsonLimitTests(unittest.TestCase):
             self.skipTest("interpreter integer-string limit is disabled")
         self.assert_batch_survives(b'{"value":' + b"9" * (limit + 1) + b"}")
 
+    def test_duplicate_provider_fields_fail_closed_without_batch_abort(self):
+        # Parser last-write-wins would turn contradictory records into OBSERVED.
+        for raw in (
+            b'{"value":[],"value":[{"id":"forged"}]}',
+            b'{"data":{"nodes":[]},"data":{"nodes":[{"id":"forged"}]}}',
+        ):
+            with self.subTest(raw=raw):
+                self.assert_batch_survives(raw)
+
     def test_existing_invalid_json_cases_remain_unavailable(self):
         for raw in (b"{", b"\xff", b'{"value":NaN}'):
             with self.subTest(raw=raw):

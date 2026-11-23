@@ -173,8 +173,12 @@ class IntegrationManifest:
         if source.stat().st_size > 512 * 1024:
             raise IntegrationValidationError("integration manifest exceeds 512 KiB")
         try:
-            payload = json.loads(source.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            payload = json.loads(
+                source.read_text(encoding="utf-8"),
+                object_pairs_hook=_reject_duplicate_json_keys,
+                parse_constant=_raise_invalid_constant,
+            )
+        except (OSError, UnicodeError, ValueError, RecursionError, IntegrationValidationError) as exc:
             raise IntegrationValidationError("integration manifest is not valid JSON") from exc
         return cls.from_mapping(payload)
 
@@ -306,7 +310,8 @@ class StdlibJsonTransport:
         try:
             payload = json.loads(
                 raw.decode("utf-8"),
-                parse_constant=lambda value: (_raise_invalid_constant(value)),
+                parse_constant=_raise_invalid_constant,
+                object_pairs_hook=_reject_duplicate_json_keys,
             )
         except (UnicodeError, ValueError, RecursionError, IntegrationValidationError):
             raise ProviderTransportError(
@@ -1005,6 +1010,16 @@ def _iso(value: datetime) -> str:
 
 def _raise_invalid_constant(value: str) -> None:
     raise IntegrationValidationError(f"invalid JSON constant: {value}")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous JSON objects before a manifest or receipt is interpreted."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise IntegrationValidationError("duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 def _first_header(headers: Any, names: Sequence[str]) -> str | None:
