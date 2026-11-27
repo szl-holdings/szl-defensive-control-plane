@@ -27,6 +27,7 @@ jobs:
   publish:
     name: verify, smoke, publish, sign, and attest
     if: github.ref == 'refs/heads/main'
+    environment: release
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
